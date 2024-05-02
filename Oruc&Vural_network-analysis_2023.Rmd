@@ -1,0 +1,430 @@
+---
+title: "Oruc&Vural_pols370_2023"
+author: "Berna Oruç & Cem Vural"
+date: "2023-05-21"
+output: html_document
+---
+DISNO: dispute number
+DYINDEX: dyadic index
+STATEA: COW number of the 1st state
+NAMEA: Abbreviated name of state A in dyad
+STATEB: COW number of the 2nd state
+NAMEB: Abbreviated name of state B in dyad
+OUTCOME: outcome of dyadic dispute
+SETTLMNT: settlement type of dyadic dispute
+HIGHACT: highest military confrontation action in dyadic dispute
+RECIP: reciprocated dispute?
+CUMDURATION: cumulative duration of the conflict in days
+
+
+This step involves providing an overview of the dataset and its variables, as well as performing any necessary data cleaning or preprocessing steps.
+
+The Militarized Interstate Disputes (MID) dataset provides information on dyadic militarized disputes between countries.
+The dataset contains variables such as country A, country B, the year of the dispute, and various attributes describing the nature and intensity of the dispute.
+Perform data cleaning and preprocessing steps, such as removing missing values or outliers, ensuring the variables are in the correct data types, and harmonizing country names if needed.
+You can also calculate additional variables or metrics that might be relevant for your analysis, such as the duration of the disputes or the cumulative intensity of conflicts over time.
+
+
+Step 2: Define Regime Types
+
+In this step, you categorize countries into regime types based on your operationalization. Here's an example of how you can define regime types:
+
+Use an existing dataset or index, such as the Polity dataset, to determine the regime type for each country.
+Load the Polity dataset using the polity package and extract the relevant variables, including country names, years, and the regime type variable (e.g., Polity2).
+Preprocess the Polity dataset by handling missing values and filtering for the relevant years that align with the MID dataset.
+Rename the regime type variable to a common categorization, such as "Democratic" and "Autocratic" or any other classification scheme you wish to use.
+Merge the regime type information from the Polity dataset with the MID dataset based on the country and year variables, creating a unified dataset that includes both the MID variables and the regime type information.
+By performing these steps, you will have a combined dataset that includes information on militarized disputes and the corresponding regime types for each country and year. This dataset can then be used for further analysis, including descriptive statistics, network analysis, and regression modeling to examine the impact of regime type on the likelihood of militarized disputes.
+
+```{r}
+library(igraph)
+library(dplyr)
+library(tidyverse)
+library(demcon)
+library(stats)
+
+polity <- demcon::get_polity5(excel = TRUE, del_file = TRUE, write_out = FALSE)
+
+polity45_10 <- polity%>%
+  select(scode, year, polity2)%>%
+  filter(year>=1945 & year<=2010)%>%
+  group_by(scode)%>%
+  summarise(polity2= mean(as.numeric(polity2), na.rm = TRUE))%>%
+  mutate(regime = ifelse(polity2 < 0, "Authocracy", ifelse(polity2 > 0, "Democracy", "0")))
+polity45_10
+
+```
+
+
+```{r}
+conflict <- read.csv("dyadic_mid_4.02.csv", header= T)
+conflict <- conflict[, c("disno", "dyindex", "statea", "namea", "stateb", "nameb","year" ,"outcome", "settlmnt", "highact", "recip","durindx" ,"cumdurat" )]
+
+conflict45_10 <- conflict %>%
+  filter(year>=1945 & year<=2010)%>%
+  filter(durindx == 1)
+```
+
+**Descriptive analysis**
+*Step 1: Data Description*
+
+```{r}
+str(conflict45_10)
+head(conflict45_10)
+summary(conflict45_10)
+```
+
+
+```{r}
+nodes <- unique(c(conflict45_10$namea, conflict45_10$nameb))
+nodes <- as.data.frame(nodes)
+colnames(nodes) <- "scode"
+node_list <- left_join(nodes, polity45_10, by="scode")
+node_list <- replace(node_list, is.na(node_list), 0)
+
+
+edges <- conflict45_10 %>%
+  filter(highact > 14) %>%
+  select(namea, nameb, outcome, settlmnt, highact, recip, cumdurat, durindx) %>%
+  distinct()
+
+
+
+nodes <- as.matrix(node_list)
+edges <- as.matrix(edges)
+
+
+network45_10 <- graph_from_data_frame(edges, vertices = node_list, directed = TRUE)
+plot(network45_10, vertex.size=10, vertex.label.cex=0.7, edge.arrow.size= 0.2)
+
+plot(network45_10, vertex.size=10, layout= layout.kamada.kawai(network45_10), vertex.label=NA, edge.arrow.size=0.3)
+
+```
+There are isolated nodes but the network is high connected. 
+```{r}
+table(degree(network45_10))
+hist(degree(network45_10))
+```
+
+
+
+```{r}
+components(network45_10)
+
+```
+
+```{r cars}
+conflict45_10_numeric <- conflict45_10[, c("disno", "dyindex","year" ,"outcome", "settlmnt", "highact", "recip", "durindx", "cumdurat" )]
+
+for (i in 1:length(conflict45_10_numeric)) {
+  column_name <- colnames(conflict45_10_numeric)[i]
+  column_range <- range(conflict45_10_numeric[, i])
+  column_sd <- sd(conflict45_10_numeric[, i])
+  cat(column_name, "range:", column_range, "sd:", column_sd,"\n")
+}
+
+```
+**Step 2: Define Regime Types**
+Categorize countries into regime types based on your operationalization
+#or example, create a new variable 'regime_type' with values 'democratic' and 'autocratic'
+```{r}
+plot(network45_10, vertex.size = 10, vertex.label.cex = 0.5, edge.arrow.size = 0.2, 
+     vertex.color = ifelse(V(network45_10)$regime == "Democracy", "darkgreen",
+                  ifelse(V(network45_10)$regime == "Autocracy", "darkred", "grey")))
+
+
+```
+We did not observe a strict group membership by regime type. 
+
+```{r}
+num_nodes <- vcount(network45_10)  # Number of nodes (countries)
+num_edges <- ecount(network45_10)  # Number of edges (dyadic disputes)
+cbind(num_edges, num_nodes)
+```
+
+Calculate degree centrality
+```{r}
+degree_centrality_out <- degree(network45_10, mode = "out")
+sort(degree_centrality_out)
+max(degree_centrality_out)
+```
+
+
+```{r}
+degree_centrality_in <- degree(network45_10, mode = "in")
+sort(degree_centrality_in)
+max(degree_centrality_in)
+```
+Because it is a directed network, the out and in degrees of nodes are equal. The highest degree is USA with 143, which is labeled as a Democratic regime. The second one is Russia, an Autocratic regime. Overall, this data shows countries with higher degree of conflict have a bigger arm reserve like USA, Russia and China, and these countries are one of the most influential states in international politics.
+
+```{r}
+
+hist(degree_centrality_out, main= "Out Degree Centrality")
+```
+
+
+```{r}
+par(mfrow=c(1,2)) 
+hist(degree(network45_10))
+plot(degree(network45_10))
+```
+
+```{r}
+plot(degree_distribution(network45_10, cumulative=T, mode="all" ), xlab= "Degree", ylab= "Cumulative frequency") 
+mean(degree(network45_10))
+```
+
+*Betweenness and Closeness*
+```{r}
+betweenness_centrality <- betweenness(network45_10)
+closeness_centrality <- closeness(network45_10)
+cat("Betweenness:", head(sort(betweenness_centrality, decreasing = TRUE), 10), "\n")
+cat("Closeness:", head(sort(closeness_centrality, decreasing = TRUE), 10), "\n")
+
+
+```
+
+*Eigenvector Centrality*
+```{r}
+eigen_centrality(network45_10)
+```
+
+
+```{r}
+# Identify key nodes using eigenvector centrality
+k.ec <- eigen_centrality(network45_10)
+which.max(k.ec$vector)
+
+# Identify hubs & authorities
+hub_score(network45_10)$vector
+
+authority_score(network45_10)$vector
+```
+
+Visualize the difference btw hubs and authorities
+```{r}
+hub <- hub_score(network45_10)$vector
+auth<- authority_score(network45_10)$vector
+
+par(mfrow=c(1,2))
+plot(network45_10, main="Hubs", vertex.label="", 
+     vertex.size=6 * sqrt(hub_score(network45_10)$vector), edge.arrow.size=0.3) 
+plot(network45_10, main="Authorities",
+     vertex.label="", vertex.size=10 *sqrt(authority_score(network45_10)$vector), edge.arrow.size= 0.3)
+```
+HUBS AUTHORİTY AÇIKLAMA
+
+
+
+*Cohesion*
+*Closed triangles*
+```{r}
+triangles(network45_10)
+count_triangles(network45_10) 
+```
+
+*Transitivity*
+```{r}
+count_triangles(network45_10, vid = 1) 
+```
+The number of triangles of a specific number of vertex= 1, USA in this case.
+
+*Transitivity*
+```{r}
+cat("TR", transitivity(network45_10,
+            vids= 3, ###TR
+            type= "local"), "Global", 
+transitivity(network45_10, type= "global"), "Average",
+transitivity(network45_10, type= "average"))
+
+```
+
+*Connectivity* : the minimum number k of its actors whose removal would not allow the group to remain connected or would reduce the group to but a single member. This measures the social cohesion of a group at a general level
+Vertex_connectivity: The minimum number of vertices needed to remove to make the graph not strongly connected.
+Edge_connectivity: The minimum number of edges needed to remove to obtain a graph which is not strongly connected. 
+```{r}
+cat("Vertex_connectivity", vertex_connectivity(network45_10), "Edge_connectivity" ,
+edge_connectivity(network45_10))
+```
+Edge or vertex connectivity 1 means connected graph, 0 means disconnected graph
+This is a disconnected graph
+
+*#Analyze connectivity*
+```{r}
+decompose(network45_10)
+k = decompose(network45_10)
+is_connected(network45_10, mode= "strong")
+is_connected(network45_10, mode= "weak")
+```
+
+*Cliques*
+```{r}
+largest_cliques(network45_10) ###find the largest cliques with the vertex IDs
+
+t= max_cliques(network45_10)
+t[[1]]
+max_cliques(network45_10)[1:3] 
+
+
+count_max_cliques(network45_10) ##counts the maximal cliques.
+```
+
+
+
+*K-Core*
+```{r}
+coreness(network45_10)
+kcore <- coreness(network45_10) 
+V(network45_10)$core <- kcore      # Add the cores as a vertex attribute
+plot.igraph(network45_10, vertex.color=V(network45_10)$core, vertex.label=NA, edge.arrow.size=0.3, vertex.size=10) #
+
+```
+
+
+```{r}
+table(kcore)
+par(mfrow= c(1,2))
+##extract the 2-core(s) from the network using the induced_subgraph() function
+g_10c <- induced_subgraph(network45_10, kcore==10)
+plot(g_10c)
+
+
+k4c <-induced_subgraph(network45_10, kcore==4)
+plot(k4c)
+```
+**Analysis**
+*Logistic model*
+
+```{r}
+network_data <- intergraph::asNetwork(network45_10)
+network_data
+```
+
+
+```{r}
+color_palette <- rainbow(length(unique(E(network45_10)$recip)))
+
+plot(network_data, edge.col = color_palette ,vertex.cex=1.5, edge.lwd=3)
+
+```
+Countries have different type of conflict both reciprocated and one way.
+
+
+```{r}
+library(network)
+library(ergm)
+set.seed(123)
+
+unique_regimes <- unique(get.vertex.attribute(network_data, "regime"))
+
+#plot(network_data, displayisolates = TRUE, vertex.col = ifelse(as.numeric(network_data %v% "polity2") > 0, "darkgreen", (ifelse(as.numeric(network_data %v% "polity2") < 0, "darkred", "white"))),  vertex.cex=2)+legend("topright", legend = unique_regimes, col = color_palette, pch = 16)
+
+```
+
+
+
+```{r}
+summary(network_data ~ edges+ triangle) ## get a summary of the nb of edges and triangles
+
+mixingmatrix(network_data, "regime") 
+
+```
+Democ-Authoc odds is higher than Democ-democ and athoc-athoc confict ratio
+
+```{r}
+set.seed(123)
+m1 <- ergm( network_data ~ edges)
+summary(m1)
+```
+```{r}
+exp(-3.4939 )/(1+exp(-3.4939 ))
+```
+When two random countries are selected, possibility of observing a tie between two random countries is 3.4939 times lower than not having a tie.
+When two random countries are selected, the probability of observing a tie between them is 2.5% compared to non-forming a tie.
+
+```{r}
+m2 <- ergm(network_data ~ edges + gwesp(0,fixed=T),
+           control = control.ergm(
+  MCMC.samplesize = 4000,
+  MCMC.burnin = 1000
+))
+summary( m2)
+```
+```{r}
+plogis(-4.7953+2.4701)
+plogis(-4.7953+2.4701)-plogis(coef(m2)[[1]])
+
+```
+Both AIC and BIC decreased, which means that adding transitivity effect improved the model.
+When two countries are selected which have a tie, the probability of observing a triangle connection is 8.9%. In other words, the possibility of observing a triangle  compared to not observing a triangle. The contribution of the transitivity to the probability is 8.1%.
+
+```{r}
+m3 <- ergm(network_data ~ edges + gwesp(0,fixed=T) + nodematch("regime"),
+           control = control.ergm(
+  MCMC.samplesize = 4000,
+  MCMC.burnin = 1000
+))
+summary( m3)
+```
+```{r}
+plogis(coef(m3)[[1]])*100
+plogis(coef(m3)[[1]]+ coef(m3)[[3]])*100
+(plogis(coef(m3)[[1]]+ coef(m3)[[2]]+ coef(m3)[[3]]) - plogis(coef(m3)[[1]]+ coef(m3)[[2]]))*100
+```
+When two random countries are selected which do not have transitivity and from different regimes, the probability to observe a tie between them is 0.96%. 
+when the countries having a tie but not having a transitivity are selected, the probability that they are in the same regime group is 1.12% compared to comes from different regimes. In other words, the possibility observing same regime type is  0.15301 times higher than different regime types when two connected but not forming triangle countries are selected.
+The homophily effect is very low since regime type variable is not statistically significant and its contribution is 0.53% which is quite low. Moreover, AIC decreased 1 unit but BIC increased 7 unit this makes this model worse. We cannot use this model.
+
+
+
+
+```{r}
+
+summary(m2)
+```
+`
+diognostics
+```{r}
+mcmc.diagnostics(m2)
+
+```
+
+The cross-correlation between "edges" and "gwesp.fixed.0" is 0.9310551, indicating a strong positive correlation.  We do not want to observe this much strong correlation. 
+When the number of lags in the Sample statistics auto-correlation increase the lower correlation between variables. But he Lag3584 shows quite strong positive correlation between variables. This seems like a degeneracy problem.
+When the plots are examined, there is no pattern in Trace of edges, and trace of transivitiy. Their density is normally distributed. These results are desirable. 
+
+```{r}
+m2_gof = gof(m2, GOF = ~model)
+plot(m2_gof)
+```
+Observed and stimulated values fitted. The lines are in the boxplots and they are close to mean (blue point).
+
+```{r}
+sim <- simulate(m2, burnin = 1e+6, verbose = TRUE, seed = 8)
+
+mixingmatrix(sim, "regime")
+mixingmatrix(network_data, "regime")
+```
+The distribution is quite similar between regime types. Again, the number between Authocracy and Democracy is high compared to democ-democ and authoc-authoc. 
+
+```{r}
+
+plot(summary(network_data ~ degree(0:400)), type = "l", lty = 1, lwd = 2, xlab = "Degree", ylab = "Count")
+lines(summary(sim ~ degree(0:400)), lty = 2, lwd = 3, col= "red")
+legend("topright", legend = c("Observed", "Simulated"), lwd = 3,  lty = 1:2)
+```
+The stimulated i.e., estimated values fit with the observed. 
+
+```{r}
+m2_gof2 = gof(m2)
+par(mfrow = c(2, 2))
+plot(m2_gof2)
+plot(gof(m2, GOF = ~ triadcensus))
+```
+For the all the degree, the actual and expected values fitted. The tendency of nodes and edges of forming triangles is correctly estimated by the model.
+
+
+
+
+
+
